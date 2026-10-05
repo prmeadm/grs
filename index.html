@@ -178,7 +178,8 @@ const CACHE_KEY = 'catalog-v2', AGENT_KEY = 'agent-name';
 let items = [], cart = new Map(), busy = false, maxPhotoMb = 20;
 const photos = new Map();   // id услуги → массив по штукам: [i] = { file, url, fileId } или пусто
 const details = new Map();  // id таблички → массив по штукам: [i] = { fio, born, died }
-let pickTarget = null;      // в какую услугу и с какой ячейки добавляем фото
+let pickTarget = null;
+let orderKey = null;        // ключ попытки оформления: повтор после сбоя не создаст второй заказ      // в какую услугу и с какой ячейки добавляем фото
 
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
@@ -300,6 +301,7 @@ catalogEl.addEventListener('click', e => {
     if (act === 'plus' || act === 'minus') {
       const q = (cart.get(id) || 0) + (act === 'plus' ? 1 : -1);
       q > 0 ? cart.set(id, q) : cart.delete(id);
+      orderKey = null;
       dropPhotos(id, Math.max(q, 0));   // фото и данные — не больше, чем штук
       if (details.has(id)) { details.get(id).splice(Math.max(q, 0)); if (!q) details.delete(id); }
       haptic.tap();
@@ -432,7 +434,9 @@ async function fetchJson(url, opts = {}, timeoutMs = 15000) {
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(url, Object.assign({}, opts, { signal: ctrl.signal }));
-    return await res.json();
+    const text = await res.text();
+    try { return JSON.parse(text); }
+    catch (e) { const err = new Error('Сервер Google вернул страницу ошибки вместо ответа.'); err.server = true; throw err; }
   } finally {
     clearTimeout(t);
   }
@@ -465,14 +469,29 @@ function setBusyText(text) {
   else { fallbackBtn.disabled = true; fallbackBtn.textContent = text; }
 }
 
-async function post(payload) {
-  const data = await fetchJson(API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // без preflight-запроса, иначе Apps Script не примет
-    body: JSON.stringify(Object.assign({ initData: tg ? tg.initData : '' }, payload))
-  }, 120000);
-  if (!data.ok) throw new Error(data.error || 'Сервер не принял запрос. Попробуйте ещё раз.');
-  return data;
+// Временные сбои сервера Google (страница ошибки, обрыв связи, тайм-аут) — повторяем до 3 раз.
+// Ошибки, которые вернул сам скрипт (например, «Укажите ФИО»), не повторяем.
+async function post(payload, label) {
+  let last;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const data = await fetchJson(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // без preflight-запроса, иначе Apps Script не примет
+        body: JSON.stringify(Object.assign({ initData: tg ? tg.initData : '' }, payload))
+      }, 180000);
+      if (!data.ok) { const err = new Error(data.error || 'Сервер не принял запрос.'); err.final = true; throw err; }
+      return data;
+    } catch (e) {
+      if (e.final) throw e;
+      last = e;
+      if (attempt < 3) await sleep(1500 * attempt);
+    }
+  }
+  const why = last.name === 'AbortError' ? 'сервер слишком долго не отвечал'
+    : last instanceof TypeError ? 'нет связи с интернетом'
+    : 'сервер Google временно не ответил';
+  throw new Error(`Не получилось: ${label} — ${why}. Нажмите «Оформить» ещё раз: уже загруженные фото повторно не грузятся, а заказ не задвоится.`);
 }
 
 function readBase64(file) {
@@ -508,25 +527,28 @@ async function submit() {
         name: queue[k].file.name || 'photo.jpg',
         mime: queue[k].file.type || 'image/jpeg',
         data: await readBase64(queue[k].file)
-      });
+      }, `загрузка фото ${k + 1} из ${queue.length}`);
       queue[k].fileId = data.fileId;
     }
 
     // 2. Заказ
     setBusyText('Оформляю заказ…');
+    if (!orderKey) orderKey = Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
     const data = await post({
+      orderKey,   // защита от двойного заказа при повторной попытке
       agent,
       items: [...cart].map(([id, qty]) => ({
         id, qty,
         photos: Array.from({ length: qty }, (_, i) => ((photos.get(id) || [])[i] || {}).fileId || null),
         details: details.has(id) ? Array.from({ length: qty }, (_, i) => details.get(id)[i] || {}) : undefined
       }))
-    });
+    }, 'оформление заказа');
+    orderKey = null;
     haptic.ok();
     showDone(data);
   } catch (e) {
     haptic.err();
-    alertMsg(e instanceof TypeError || e.name === 'AbortError' ? 'Нет связи с сервером. Проверьте интернет и попробуйте ещё раз.' : e.message);
+    alertMsg(e.message);
   } finally {
     busy = false;
     if (tg) tg.MainButton.enable(); else fallbackBtn.disabled = false;
