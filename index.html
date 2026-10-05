@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Заказ услуг</title>
+<link rel="preconnect" href="https://script.google.com">
+<link rel="preconnect" href="https://script.googleusercontent.com">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   /* Цвета берутся из темы Telegram; запасные значения нужны только для проверки в обычном браузере */
@@ -65,6 +67,19 @@
     color: var(--accent); font: inherit; font-size: 22px; cursor: pointer; padding: 0;
     display: grid; place-items: center;
   }
+  /* Данные для табличек: блок на каждую штуку */
+  .plates { padding: 0 12px 12px 62px; display: grid; gap: 10px; }
+  .plate { border-radius: 12px; background: color-mix(in srgb, var(--hint) 9%, transparent); padding: 10px 10px 12px; }
+  .plate-title { font-size: 13px; font-weight: 600; color: var(--hint); margin: 0 2px 6px; }
+  .plate-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .plate-grid .wide { grid-column: 1 / -1; }
+  .mini { display: block; background: var(--card); border-radius: 9px; padding: 6px 10px 7px; border: 1px solid transparent; }
+  .mini span { display: block; font-size: 12px; color: var(--hint); }
+  .mini input { width: 100%; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; font-size: 16px; padding: 1px 0; font-variant-numeric: tabular-nums; }
+  .mini input::placeholder { color: var(--hint); opacity: .6; }
+  .mini.invalid { border-color: var(--danger); }
+  .mini.invalid span { color: var(--danger); }
+  .plate-photo { display: flex; align-items: center; gap: 10px; margin-top: 8px; font-size: 13px; color: var(--hint); }
   .slot.filled { border: 0; background: var(--sep) center / cover no-repeat; cursor: default; }
   .slot .rm {
     position: absolute; top: -6px; right: -6px; width: 22px; height: 22px; border-radius: 11px; border: 2px solid var(--card);
@@ -99,6 +114,12 @@
   .stepper output { min-width: 22px; text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
   button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+  /* Заглушка, пока грузится прайс */
+  .skeleton .row { grid-template-columns: 40px 1fr 34px; }
+  .bone { height: 12px; border-radius: 6px; background: var(--sep); animation: pulse 1.2s ease-in-out infinite; }
+  .bone.sq { width: 26px; height: 32px; border-radius: 3px; margin: auto; }
+  .bone.btn { width: 34px; height: 34px; border-radius: 17px; }
+  @keyframes pulse { 50% { opacity: .45; } }
   .state { text-align: center; color: var(--hint); padding: 36px 12px; }
   .state button { margin-top: 12px; }
   .link-btn { border: 0; background: none; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; padding: 8px; }
@@ -133,7 +154,7 @@
     </label>
   </div>
 
-  <div id="catalog"><p class="state">Загружаю прайс…</p></div>
+  <div id="catalog"></div>
   <button class="fallback" id="fallbackBtn" hidden></button>
   <input type="file" id="filePick" accept="image/*" multiple hidden>
 </main>
@@ -155,7 +176,8 @@ const $ = id => document.getElementById(id);
 const catalogEl = $('catalog'), agentEl = $('agent'), fallbackBtn = $('fallbackBtn'), filePick = $('filePick');
 const CACHE_KEY = 'catalog-v2', AGENT_KEY = 'agent-name';
 let items = [], cart = new Map(), busy = false, maxPhotoMb = 20;
-const photos = new Map();   // id услуги → [{ file, url, fileId }]
+const photos = new Map();   // id услуги → массив по штукам: [i] = { file, url, fileId } или пусто
+const details = new Map();  // id таблички → массив по штукам: [i] = { fio, born, died }
 let pickTarget = null;      // в какую услугу и с какой ячейки добавляем фото
 
 const store = {
@@ -195,7 +217,8 @@ function render(list) {
   items = list;
   const ids = new Set(list.map(i => i.id));
   for (const id of cart.keys()) if (!ids.has(id)) cart.delete(id);
-  for (const id of photos.keys()) if (!ids.has(id) || !list.find(i => i.id === id).photo) dropPhotos(id, 0);
+  for (const id of [...photos.keys()]) if (!ids.has(id) || !list.find(i => i.id === id).photo) dropPhotos(id, 0);
+  for (const id of [...details.keys()]) if (!ids.has(id) || !list.find(i => i.id === id).memorial) details.delete(id);
 
   const groups = new Map();
   list.forEach(it => { if (!groups.has(it.category)) groups.set(it.category, []); groups.get(it.category).push(it); });
@@ -212,30 +235,57 @@ function rowHtml(it) {
   const ctrl = q
     ? `<div class="stepper"><button data-act="minus" aria-label="Убрать одну">−</button><output>${q}</output><button data-act="plus" aria-label="Добавить ещё">+</button></div>`
     : `<button class="add" data-act="plus" aria-label="Добавить ${esc(it.name)}">+</button>`;
+  let extra = '';
+  if (q && it.memorial) extra = platesHtml(it, q);
+  else if (q && it.photo) extra = photosHtml(it.id, q);
   return `<div class="item" data-id="${esc(it.id)}"><div class="row${q ? ' picked' : ''}">
     ${glyph(it.name)}
     <div><div class="name">${esc(it.name)}</div><div class="price">${money(it.price)}${q > 1 ? ' × ' + q + ' = ' + money(it.price * q) : ''}</div></div>
-    ${ctrl}</div>${it.photo && q ? photosHtml(it.id, q) : ''}</div>`;
+    ${ctrl}</div>${extra}</div>`;
+}
+
+function slotHtml(id, i) {
+  const p = (photos.get(id) || [])[i];
+  return p
+    ? `<div class="slot filled" style="background-image:url('${p.url}')" role="img" aria-label="Фото ${i + 1}"><span class="num">${i + 1}</span><button class="rm" data-act="rm" data-i="${i}" aria-label="Убрать фото ${i + 1}">×</button></div>`
+    : `<button class="slot" data-act="pick" data-i="${i}" aria-label="Прикрепить фото ${i + 1}">+</button>`;
 }
 
 function photosHtml(id, q) {
-  const arr = photos.get(id) || [];
+  const n = countPhotos(id);
   const slots = [];
-  for (let i = 0; i < q; i++) {
-    const p = arr[i];
-    slots.push(p
-      ? `<div class="slot filled" style="background-image:url('${p.url}')" role="img" aria-label="Фото ${i + 1}"><span class="num">${i + 1}</span><button class="rm" data-act="rm" data-i="${i}" aria-label="Убрать фото ${i + 1}">×</button></div>`
-      : `<button class="slot" data-act="pick" data-i="${i}" aria-label="Прикрепить фото ${i + 1}">+</button>`);
-  }
-  const label = arr.length ? `Фото: ${arr.length} из ${q}` : `Можно прикрепить фото: до ${q}`;
+  for (let i = 0; i < q; i++) slots.push(slotHtml(id, i));
+  const label = n ? `Фото: ${n} из ${q}` : `Можно прикрепить фото: до ${q}`;
   return `<div class="photos"><div class="photos-label">${label}</div><div class="slots">${slots.join('')}</div></div>`;
 }
+
+function platesHtml(it, q) {
+  const arr = details.get(it.id) || [];
+  const blocks = [];
+  for (let i = 0; i < q; i++) {
+    const d = arr[i] || {};
+    const field = (f, label, cls, attrs) =>
+      `<label class="mini ${cls}"><span>${label}</span><input data-f="${f}" data-i="${i}" value="${esc(d[f] || '')}" ${attrs}></label>`;
+    const photo = it.photo
+      ? `<div class="plate-photo">${slotHtml(it.id, i)}<span>${(photos.get(it.id) || [])[i] ? 'Фото для таблички' : 'Прикрепить фото (необязательно)'}</span></div>`
+      : '';
+    blocks.push(`<div class="plate"><div class="plate-title">${q > 1 ? 'Табличка ' + (i + 1) : 'Данные для таблички'}</div>
+      <div class="plate-grid">
+        ${field('fio', 'ФИО усопшего', 'wide', 'autocomplete="off" autocapitalize="words" maxlength="150" placeholder="Иванов Иван Иванович"')}
+        ${field('born', 'Дата рождения', '', 'inputmode="numeric" maxlength="10" placeholder="дд.мм.гггг"')}
+        ${field('died', 'Дата смерти', '', 'inputmode="numeric" maxlength="10" placeholder="дд.мм.гггг"')}
+      </div>${photo}</div>`);
+  }
+  return `<div class="plates">${blocks.join('')}</div>`;
+}
+
+function countPhotos(id) { return (photos.get(id) || []).filter(Boolean).length; }
 
 function dropPhotos(id, keep) {
   const arr = photos.get(id);
   if (!arr) return;
-  arr.splice(keep).forEach(p => URL.revokeObjectURL(p.url));
-  if (!arr.length) photos.delete(id);
+  arr.splice(keep).forEach(p => p && URL.revokeObjectURL(p.url));
+  if (!arr.some(Boolean)) photos.delete(id);
 }
 
 function redraw(id) {
@@ -250,21 +300,23 @@ catalogEl.addEventListener('click', e => {
     if (act === 'plus' || act === 'minus') {
       const q = (cart.get(id) || 0) + (act === 'plus' ? 1 : -1);
       q > 0 ? cart.set(id, q) : cart.delete(id);
-      dropPhotos(id, Math.max(q, 0));   // фото не больше, чем штук
+      dropPhotos(id, Math.max(q, 0));   // фото и данные — не больше, чем штук
+      if (details.has(id)) { details.get(id).splice(Math.max(q, 0)); if (!q) details.delete(id); }
       haptic.tap();
       redraw(id);
       updateTotal();
     } else if (act === 'pick') {
       if (busy) return;
-      pickTarget = id;
+      pickTarget = { id, from: +btn.dataset.i };
       filePick.value = '';
       filePick.click();
     } else if (act === 'rm') {
       if (busy) return;
       const arr = photos.get(id) || [];
-      const [p] = arr.splice(+btn.dataset.i, 1);
-      if (p) URL.revokeObjectURL(p.url);
-      if (!arr.length) photos.delete(id);
+      const i = +btn.dataset.i;
+      if (arr[i]) URL.revokeObjectURL(arr[i].url);
+      arr[i] = undefined;
+      if (!arr.some(Boolean)) photos.delete(id);
       haptic.tap();
       redraw(id);
     }
@@ -273,25 +325,86 @@ catalogEl.addEventListener('click', e => {
   if (e.target.id === 'retry') loadCatalog();
 });
 
-filePick.addEventListener('change', () => {
-  const id = pickTarget;
-  pickTarget = null;
-  if (!id || !filePick.files.length) return;
-  const q = cart.get(id) || 0;
-  const arr = photos.get(id) || [];
-  let tooBig = 0, extra = 0;
-  for (const file of filePick.files) {
-    if (arr.length >= q) { extra++; continue; }
-    if (file.size > maxPhotoMb * 1024 * 1024) { tooBig++; continue; }
-    arr.push({ file, url: URL.createObjectURL(file), fileId: null });
+// Ввод ФИО и дат: сохраняем без перерисовки, чтобы не сбивать фокус
+function maskDate(v) {
+  const d = v.replace(/\D/g, '').slice(0, 8);
+  return d.length > 4 ? `${d.slice(0, 2)}.${d.slice(2, 4)}.${d.slice(4)}` : d.length > 2 ? `${d.slice(0, 2)}.${d.slice(2)}` : d;
+}
+catalogEl.addEventListener('input', e => {
+  const inp = e.target.closest('input[data-f]');
+  if (!inp) return;
+  const id = inp.closest('.item').dataset.id, i = +inp.dataset.i, f = inp.dataset.f;
+  if (f !== 'fio') {
+    const masked = maskDate(inp.value);
+    if (masked !== inp.value) inp.value = masked;
   }
-  if (arr.length) photos.set(id, arr);
-  redraw(id);
+  const arr = details.get(id) || [];
+  arr[i] = Object.assign({}, arr[i], { [f]: inp.value });
+  details.set(id, arr);
+  inp.closest('.mini').classList.remove('invalid');
+});
+
+filePick.addEventListener('change', () => {
+  const t = pickTarget;
+  pickTarget = null;
+  if (!t || !filePick.files.length) return;
+  const q = cart.get(t.id) || 0;
+  const arr = photos.get(t.id) || [];
+  const it = items.find(x => x.id === t.id);
+  // Для табличек фото ставится ровно в свою ячейку; для печати — заполняет свободные ячейки начиная с выбранной
+  const free = [];
+  for (let i = t.from; i < q; i++) if (!arr[i]) free.push(i);
+  if (!it.memorial) for (let i = 0; i < t.from; i++) if (!arr[i]) free.push(i);
+  const limit = it.memorial ? Math.min(free.length, 1) : free.length;
+  let tooBig = 0, extra = 0, k = 0;
+  for (const file of filePick.files) {
+    if (k >= limit) { extra++; continue; }
+    if (file.size > maxPhotoMb * 1024 * 1024) { tooBig++; continue; }
+    arr[free[k++]] = { file, url: URL.createObjectURL(file), fileId: null };
+  }
+  if (arr.some(Boolean)) photos.set(t.id, arr);
+  redraw(t.id);
   const notes = [];
-  if (extra) notes.push(`К этой услуге можно прикрепить не больше ${q} фото, по количеству. Не добавлено: ${extra}.`);
+  if (extra) notes.push(it.memorial
+    ? `Для одной таблички — одно фото. Не добавлено: ${extra}.`
+    : `К этой услуге можно прикрепить не больше ${q} фото, по количеству. Не добавлено: ${extra}.`);
   if (tooBig) notes.push(`Фото больше ${maxPhotoMb} МБ не прикрепляются. Пропущено: ${tooBig}.`);
   if (notes.length) alertMsg(notes.join('\n'));
 });
+
+/** Проверка ФИО и дат для всех табличек в корзине. Возвращает текст ошибки или ''. */
+function parseDate(s) {
+  const m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(s || '');
+  if (!m) return null;
+  const d = new Date(+m[3], +m[2] - 1, +m[1]);
+  if (d.getFullYear() !== +m[3] || d.getMonth() !== +m[2] - 1 || d.getDate() !== +m[1]) return null;
+  if (+m[3] < 1800 || d > new Date()) return null;
+  return d;
+}
+function validatePlates() {
+  let firstBad = null, msg = '';
+  const mark = (id, i, f, text) => {
+    const inp = catalogEl.querySelector(`.item[data-id="${CSS.escape(id)}"] input[data-f="${f}"][data-i="${i}"]`);
+    if (inp) inp.closest('.mini').classList.add('invalid');
+    if (!firstBad) { firstBad = inp; msg = text; }
+  };
+  for (const [id, q] of cart) {
+    const it = items.find(x => x.id === id);
+    if (!it || !it.memorial) continue;
+    const arr = details.get(id) || [];
+    for (let i = 0; i < q; i++) {
+      const d = arr[i] || {};
+      const where = q > 1 ? ` (табличка ${i + 1})` : '';
+      if (!String(d.fio || '').trim()) mark(id, i, 'fio', `Укажите ФИО усопшего${where}.`);
+      const b = parseDate(d.born), dd = parseDate(d.died);
+      if (!b) mark(id, i, 'born', `Укажите дату рождения в формате дд.мм.гггг${where}.`);
+      if (!dd) mark(id, i, 'died', `Укажите дату смерти в формате дд.мм.гггг${where}.`);
+      if (b && dd && dd < b) mark(id, i, 'died', `Дата смерти раньше даты рождения${where}.`);
+    }
+  }
+  if (firstBad) { firstBad.scrollIntoView({ behavior: 'smooth', block: 'center' }); setTimeout(() => firstBad.focus(), 300); }
+  return msg;
+}
 
 function total() { return items.reduce((s, it) => s + it.price * (cart.get(it.id) || 0), 0); }
 
@@ -307,21 +420,43 @@ function updateTotal() {
   }
 }
 
+function skeleton() {
+  const row = w => `<div class="item"><div class="row"><span class="bone sq"></span><div><div class="bone" style="width:${w}%"></div><div class="bone" style="width:22%;margin-top:8px"></div></div><span class="bone btn"></span></div></div>`;
+  catalogEl.innerHTML = `<h2 class="group-title">Загружаю прайс…</h2><div class="group skeleton">${[70, 55, 62, 48].map(row).join('')}</div>`;
+}
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function fetchJson(url, opts = {}, timeoutMs = 15000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, Object.assign({}, opts, { signal: ctrl.signal }));
+    return await res.json();
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 async function loadCatalog() {
   let cached = null;
   try { cached = JSON.parse(store.get(CACHE_KEY) || 'null'); } catch (e) {}
-  if (cached) render(cached);
-  else catalogEl.innerHTML = '<p class="state">Загружаю прайс…</p>';
-  try {
-    const res = await fetch(API_URL);
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error);
-    if (data.maxPhotoMb) maxPhotoMb = data.maxPhotoMb;
-    store.set(CACHE_KEY, JSON.stringify(data.items));
-    render(data.items);
-  } catch (e) {
-    if (!cached) catalogEl.innerHTML = '<p class="state">Не удалось загрузить прайс. Проверьте интернет.<br><button class="link-btn" id="retry">Повторить</button></p>';
+  if (cached) render(cached); else skeleton();
+
+  // Сервер Google иногда «просыпается» несколько секунд — пробуем до 3 раз, прежде чем показать ошибку
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const data = await fetchJson(API_URL, {}, attempt === 1 ? 12000 : 20000);
+      if (!data.ok) throw new Error(data.error);
+      if (data.maxPhotoMb) maxPhotoMb = data.maxPhotoMb;
+      store.set(CACHE_KEY, JSON.stringify(data.items));
+      render(data.items);
+      return;
+    } catch (e) {
+      if (attempt < 3) await sleep(attempt * 800);
+    }
   }
+  if (!cached) catalogEl.innerHTML = '<p class="state">Не удалось загрузить прайс. Проверьте интернет.<br><button class="link-btn" id="retry">Повторить</button></p>';
 }
 
 /* ---------- Оформление ---------- */
@@ -331,12 +466,11 @@ function setBusyText(text) {
 }
 
 async function post(payload) {
-  const res = await fetch(API_URL, {
+  const data = await fetchJson(API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // без preflight-запроса, иначе Apps Script не примет
     body: JSON.stringify(Object.assign({ initData: tg ? tg.initData : '' }, payload))
-  });
-  const data = await res.json();
+  }, 120000);
   if (!data.ok) throw new Error(data.error || 'Сервер не принял запрос. Попробуйте ещё раз.');
   return data;
 }
@@ -360,11 +494,13 @@ async function submit() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
     return;
   }
+  const plateError = validatePlates();
+  if (plateError) { haptic.err(); alertMsg(plateError); return; }
   busy = true;
   try {
     // 1. Фото — по одному, оригиналами. Уже загруженные при повторной попытке не грузятся заново
     const queue = [];
-    for (const arr of photos.values()) arr.forEach(p => { if (!p.fileId) queue.push(p); });
+    for (const [id, arr] of photos) if (cart.has(id)) arr.forEach(p => { if (p && !p.fileId) queue.push(p); });
     for (let k = 0; k < queue.length; k++) {
       setBusyText(`Загружаю фото ${k + 1} из ${queue.length}…`);
       const data = await post({
@@ -380,13 +516,17 @@ async function submit() {
     setBusyText('Оформляю заказ…');
     const data = await post({
       agent,
-      items: [...cart].map(([id, qty]) => ({ id, qty, photos: (photos.get(id) || []).map(p => p.fileId) }))
+      items: [...cart].map(([id, qty]) => ({
+        id, qty,
+        photos: Array.from({ length: qty }, (_, i) => ((photos.get(id) || [])[i] || {}).fileId || null),
+        details: details.has(id) ? Array.from({ length: qty }, (_, i) => details.get(id)[i] || {}) : undefined
+      }))
     });
     haptic.ok();
     showDone(data);
   } catch (e) {
     haptic.err();
-    alertMsg(e instanceof TypeError ? 'Нет связи с сервером. Проверьте интернет и попробуйте ещё раз.' : e.message);
+    alertMsg(e instanceof TypeError || e.name === 'AbortError' ? 'Нет связи с сервером. Проверьте интернет и попробуйте ещё раз.' : e.message);
   } finally {
     busy = false;
     if (tg) tg.MainButton.enable(); else fallbackBtn.disabled = false;
@@ -406,7 +546,8 @@ function showDone(data) {
 
 function resetOrder() {
   cart.clear();
-  for (const id of [...photos.keys()]) dropPhotos(id, 0); $('done').hidden = true; $('app').hidden = false; $('doneText').className = '';
+  for (const id of [...photos.keys()]) dropPhotos(id, 0);
+  details.clear(); $('done').hidden = true; $('app').hidden = false; $('doneText').className = '';
   render(items);
 }
 
