@@ -86,6 +86,14 @@
     background: var(--text); color: var(--card); font-size: 13px; line-height: 1; padding: 0; cursor: pointer;
     display: grid; place-items: center;
   }
+  /* Фото грузится на сервер сразу после прикрепления */
+  .slot.up::before { content: ""; position: absolute; inset: 0; border-radius: inherit; background: rgba(0,0,0,.35); }
+  .slot.up::after {
+    content: ""; position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -11px 0 0 -11px;
+    border: 2px solid rgba(255,255,255,.35); border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite;
+  }
+  .slot.err { outline: 2px solid var(--danger); outline-offset: 1px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .slot .num {
     position: absolute; left: 4px; bottom: 4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
     background: rgba(0,0,0,.55); color: #fff; font-size: 11px; line-height: 16px; text-align: center;
@@ -176,7 +184,7 @@ const $ = id => document.getElementById(id);
 const catalogEl = $('catalog'), agentEl = $('agent'), fallbackBtn = $('fallbackBtn'), filePick = $('filePick');
 const CACHE_KEY = 'catalog-v2', AGENT_KEY = 'agent-name';
 let items = [], cart = new Map(), busy = false, maxPhotoMb = 20;
-const photos = new Map();   // id услуги → массив по штукам: [i] = { file, url, fileId } или пусто
+const photos = new Map();   // id услуги → массив по штукам: [i] = { uid, file, url, fileId, state, task } или пусто
 const details = new Map();  // id таблички → массив по штукам: [i] = { fio, born, died }
 let pickTarget = null;
 let orderKey = null;        // ключ попытки оформления: повтор после сбоя не создаст второй заказ      // в какую услугу и с какой ячейки добавляем фото
@@ -248,7 +256,7 @@ function rowHtml(it) {
 function slotHtml(id, i) {
   const p = (photos.get(id) || [])[i];
   return p
-    ? `<div class="slot filled" style="background-image:url('${p.url}')" role="img" aria-label="Фото ${i + 1}"><span class="num">${i + 1}</span><button class="rm" data-act="rm" data-i="${i}" aria-label="Убрать фото ${i + 1}">×</button></div>`
+    ? `<div class="slot filled${p.state === 'up' ? ' up' : p.state === 'err' ? ' err' : ''}" data-uid="${p.uid}" style="background-image:url('${p.url}')" role="img" aria-label="Фото ${i + 1}"><span class="num">${i + 1}</span><button class="rm" data-act="rm" data-i="${i}" aria-label="Убрать фото ${i + 1}">×</button></div>`
     : `<button class="slot" data-act="pick" data-i="${i}" aria-label="Прикрепить фото ${i + 1}">+</button>`;
 }
 
@@ -285,7 +293,7 @@ function countPhotos(id) { return (photos.get(id) || []).filter(Boolean).length;
 function dropPhotos(id, keep) {
   const arr = photos.get(id);
   if (!arr) return;
-  arr.splice(keep).forEach(p => p && URL.revokeObjectURL(p.url));
+  arr.splice(keep).forEach(p => { if (p) { p.dead = true; URL.revokeObjectURL(p.url); } });
   if (!arr.some(Boolean)) photos.delete(id);
 }
 
@@ -316,7 +324,7 @@ catalogEl.addEventListener('click', e => {
       if (busy) return;
       const arr = photos.get(id) || [];
       const i = +btn.dataset.i;
-      if (arr[i]) URL.revokeObjectURL(arr[i].url);
+      if (arr[i]) { arr[i].dead = true; URL.revokeObjectURL(arr[i].url); }
       arr[i] = undefined;
       if (!arr.some(Boolean)) photos.delete(id);
       haptic.tap();
@@ -359,11 +367,15 @@ filePick.addEventListener('change', () => {
   if (!it.memorial) for (let i = 0; i < t.from; i++) if (!arr[i]) free.push(i);
   const limit = it.memorial ? Math.min(free.length, 1) : free.length;
   let tooBig = 0, extra = 0, k = 0;
+  const added = [];
   for (const file of filePick.files) {
     if (k >= limit) { extra++; continue; }
     if (file.size > maxPhotoMb * 1024 * 1024) { tooBig++; continue; }
-    arr[free[k++]] = { file, url: URL.createObjectURL(file), fileId: null };
+    const p = { uid: ++photoSeq, file, url: URL.createObjectURL(file), fileId: null };
+    arr[free[k++]] = p;
+    added.push(p);
   }
+  added.forEach(startUpload);   // грузим сразу, пока агент заполняет остальное
   if (arr.some(Boolean)) photos.set(t.id, arr);
   redraw(t.id);
   const notes = [];
@@ -503,6 +515,50 @@ function readBase64(file) {
   });
 }
 
+/* ---------- Фото грузятся сразу после прикрепления, по несколько одновременно ---------- */
+const UPLOAD_PARALLEL = 3;
+let photoSeq = 0, uploading = 0;
+const uploadQueue = [];
+
+function paintSlot(p) {
+  const el = catalogEl.querySelector(`.slot[data-uid="${p.uid}"]`);
+  if (!el) return;
+  el.classList.toggle('up', p.state === 'up');
+  el.classList.toggle('err', p.state === 'err');
+}
+
+function startUpload(p) {
+  p.state = 'up'; p.error = null;
+  paintSlot(p);
+  p.task = new Promise(resolve => uploadQueue.push({ p, resolve }));
+  pumpUploads();
+  return p.task;
+}
+
+function pumpUploads() {
+  while (uploading < UPLOAD_PARALLEL && uploadQueue.length) {
+    const { p, resolve } = uploadQueue.shift();
+    if (p.dead) { resolve(); continue; }
+    uploading++;
+    uploadOne(p).finally(() => { uploading--; resolve(); pumpUploads(); });
+  }
+}
+
+async function uploadOne(p) {
+  try {
+    const data = await post({
+      action: 'upload',
+      name: p.file.name || 'photo.jpg',
+      mime: p.file.type || 'image/jpeg',
+      data: await readBase64(p.file)
+    }, 'загрузка фото');
+    p.fileId = data.fileId; p.state = 'ok';
+  } catch (e) {
+    p.state = 'err'; p.error = e;
+  }
+  paintSlot(p);
+}
+
 async function submit() {
   if (busy || !cart.size) return;
   const agent = agentEl.value.replace(/\s+/g, ' ').trim();
@@ -517,18 +573,16 @@ async function submit() {
   if (plateError) { haptic.err(); alertMsg(plateError); return; }
   busy = true;
   try {
-    // 1. Фото — по одному, оригиналами. Уже загруженные при повторной попытке не грузятся заново
-    const queue = [];
-    for (const [id, arr] of photos) if (cart.has(id)) arr.forEach(p => { if (p && !p.fileId) queue.push(p); });
-    for (let k = 0; k < queue.length; k++) {
-      setBusyText(`Загружаю фото ${k + 1} из ${queue.length}…`);
-      const data = await post({
-        action: 'upload',
-        name: queue[k].file.name || 'photo.jpg',
-        mime: queue[k].file.type || 'image/jpeg',
-        data: await readBase64(queue[k].file)
-      }, `загрузка фото ${k + 1} из ${queue.length}`);
-      queue[k].fileId = data.fileId;
+    // 1. Фото уже грузятся с момента прикрепления — дожидаемся оставшихся, неудачные пробуем ещё раз
+    const need = [];
+    for (const [id, arr] of photos) if (cart.has(id)) arr.forEach(p => { if (p) need.push(p); });
+    need.forEach(p => { if (!p.fileId && p.state !== 'up') startUpload(p); });
+    let left;
+    while ((left = need.filter(p => !p.fileId)).length) {
+      setBusyText(`Загружаю фото: осталось ${left.length} из ${need.length}…`);
+      await Promise.race(left.map(p => p.task));
+      const failed = need.find(p => !p.fileId && p.state === 'err');
+      if (failed) throw failed.error;
     }
 
     // 2. Заказ
