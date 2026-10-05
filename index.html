@@ -50,9 +50,31 @@
   .field.invalid { animation: nudge .32s ease; }
   @keyframes nudge { 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
 
+  .item { position: relative; }
+  .item + .item::before { content: ""; position: absolute; top: 0; left: 62px; right: 0; height: 1px; background: var(--sep); }
   .row { display: grid; grid-template-columns: 40px 1fr auto; align-items: center; gap: 12px; padding: 10px 12px 10px 10px; min-height: 60px; }
-  .row { position: relative; }
-  .row + .row::before { content: ""; position: absolute; top: 0; left: 62px; right: 0; height: 1px; background: var(--sep); }
+
+  /* Фото к услуге: столько ячеек, сколько выбрано штук */
+  .photos { padding: 0 12px 12px 62px; }
+  .photos-label { font-size: 13px; color: var(--hint); margin-bottom: 7px; }
+  .slots { display: flex; flex-wrap: wrap; gap: 8px; }
+  .slot {
+    position: relative; width: 58px; height: 58px; border-radius: 10px; flex: none;
+    border: 1.5px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
+    color: var(--accent); font: inherit; font-size: 22px; cursor: pointer; padding: 0;
+    display: grid; place-items: center;
+  }
+  .slot.filled { border: 0; background: var(--sep) center / cover no-repeat; cursor: default; }
+  .slot .rm {
+    position: absolute; top: -6px; right: -6px; width: 22px; height: 22px; border-radius: 11px; border: 2px solid var(--card);
+    background: var(--text); color: var(--card); font-size: 13px; line-height: 1; padding: 0; cursor: pointer;
+    display: grid; place-items: center;
+  }
+  .slot .num {
+    position: absolute; left: 4px; bottom: 4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
+    background: rgba(0,0,0,.55); color: #fff; font-size: 11px; line-height: 16px; text-align: center;
+  }
   .name { font-size: 16px; }
   .price { font-size: 14px; color: var(--hint); margin-top: 1px; font-variant-numeric: tabular-nums; }
   .row.picked .price { color: var(--accent); }
@@ -113,6 +135,7 @@
 
   <div id="catalog"><p class="state">Загружаю прайс…</p></div>
   <button class="fallback" id="fallbackBtn" hidden></button>
+  <input type="file" id="filePick" accept="image/*" multiple hidden>
 </main>
 
 <section id="done" hidden>
@@ -129,9 +152,11 @@ const API_URL = 'https://script.google.com/macros/s/AKfycbwxtCYWOmr4VmO1dl9NmZgW
 
 const tg = window.Telegram && Telegram.WebApp && Telegram.WebApp.initData ? Telegram.WebApp : null;
 const $ = id => document.getElementById(id);
-const catalogEl = $('catalog'), agentEl = $('agent'), fallbackBtn = $('fallbackBtn');
-const CACHE_KEY = 'catalog-v1', AGENT_KEY = 'agent-name';
-let items = [], cart = new Map(), busy = false;
+const catalogEl = $('catalog'), agentEl = $('agent'), fallbackBtn = $('fallbackBtn'), filePick = $('filePick');
+const CACHE_KEY = 'catalog-v2', AGENT_KEY = 'agent-name';
+let items = [], cart = new Map(), busy = false, maxPhotoMb = 20;
+const photos = new Map();   // id услуги → [{ file, url, fileId }]
+let pickTarget = null;      // в какую услугу и с какой ячейки добавляем фото
 
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
@@ -170,6 +195,7 @@ function render(list) {
   items = list;
   const ids = new Set(list.map(i => i.id));
   for (const id of cart.keys()) if (!ids.has(id)) cart.delete(id);
+  for (const id of photos.keys()) if (!ids.has(id) || !list.find(i => i.id === id).photo) dropPhotos(id, 0);
 
   const groups = new Map();
   list.forEach(it => { if (!groups.has(it.category)) groups.set(it.category, []); groups.get(it.category).push(it); });
@@ -186,24 +212,85 @@ function rowHtml(it) {
   const ctrl = q
     ? `<div class="stepper"><button data-act="minus" aria-label="Убрать одну">−</button><output>${q}</output><button data-act="plus" aria-label="Добавить ещё">+</button></div>`
     : `<button class="add" data-act="plus" aria-label="Добавить ${esc(it.name)}">+</button>`;
-  return `<div class="row${q ? ' picked' : ''}" data-id="${esc(it.id)}">
+  return `<div class="item" data-id="${esc(it.id)}"><div class="row${q ? ' picked' : ''}">
     ${glyph(it.name)}
     <div><div class="name">${esc(it.name)}</div><div class="price">${money(it.price)}${q > 1 ? ' × ' + q + ' = ' + money(it.price * q) : ''}</div></div>
-    ${ctrl}</div>`;
+    ${ctrl}</div>${it.photo && q ? photosHtml(it.id, q) : ''}</div>`;
+}
+
+function photosHtml(id, q) {
+  const arr = photos.get(id) || [];
+  const slots = [];
+  for (let i = 0; i < q; i++) {
+    const p = arr[i];
+    slots.push(p
+      ? `<div class="slot filled" style="background-image:url('${p.url}')" role="img" aria-label="Фото ${i + 1}"><span class="num">${i + 1}</span><button class="rm" data-act="rm" data-i="${i}" aria-label="Убрать фото ${i + 1}">×</button></div>`
+      : `<button class="slot" data-act="pick" data-i="${i}" aria-label="Прикрепить фото ${i + 1}">+</button>`);
+  }
+  const label = arr.length ? `Фото: ${arr.length} из ${q}` : `Можно прикрепить фото: до ${q}`;
+  return `<div class="photos"><div class="photos-label">${label}</div><div class="slots">${slots.join('')}</div></div>`;
+}
+
+function dropPhotos(id, keep) {
+  const arr = photos.get(id);
+  if (!arr) return;
+  arr.splice(keep).forEach(p => URL.revokeObjectURL(p.url));
+  if (!arr.length) photos.delete(id);
+}
+
+function redraw(id) {
+  const el = catalogEl.querySelector(`.item[data-id="${CSS.escape(id)}"]`);
+  if (el) el.outerHTML = rowHtml(items.find(i => i.id === id));
 }
 
 catalogEl.addEventListener('click', e => {
   const btn = e.target.closest('button[data-act]');
   if (btn) {
-    const row = btn.closest('.row'), id = row.dataset.id;
-    const q = (cart.get(id) || 0) + (btn.dataset.act === 'plus' ? 1 : -1);
-    q > 0 ? cart.set(id, q) : cart.delete(id);
-    row.outerHTML = rowHtml(items.find(i => i.id === id));
-    haptic.tap();
-    updateTotal();
+    const id = btn.closest('.item').dataset.id, act = btn.dataset.act;
+    if (act === 'plus' || act === 'minus') {
+      const q = (cart.get(id) || 0) + (act === 'plus' ? 1 : -1);
+      q > 0 ? cart.set(id, q) : cart.delete(id);
+      dropPhotos(id, Math.max(q, 0));   // фото не больше, чем штук
+      haptic.tap();
+      redraw(id);
+      updateTotal();
+    } else if (act === 'pick') {
+      if (busy) return;
+      pickTarget = id;
+      filePick.value = '';
+      filePick.click();
+    } else if (act === 'rm') {
+      if (busy) return;
+      const arr = photos.get(id) || [];
+      const [p] = arr.splice(+btn.dataset.i, 1);
+      if (p) URL.revokeObjectURL(p.url);
+      if (!arr.length) photos.delete(id);
+      haptic.tap();
+      redraw(id);
+    }
     return;
   }
   if (e.target.id === 'retry') loadCatalog();
+});
+
+filePick.addEventListener('change', () => {
+  const id = pickTarget;
+  pickTarget = null;
+  if (!id || !filePick.files.length) return;
+  const q = cart.get(id) || 0;
+  const arr = photos.get(id) || [];
+  let tooBig = 0, extra = 0;
+  for (const file of filePick.files) {
+    if (arr.length >= q) { extra++; continue; }
+    if (file.size > maxPhotoMb * 1024 * 1024) { tooBig++; continue; }
+    arr.push({ file, url: URL.createObjectURL(file), fileId: null });
+  }
+  if (arr.length) photos.set(id, arr);
+  redraw(id);
+  const notes = [];
+  if (extra) notes.push(`К этой услуге можно прикрепить не больше ${q} фото, по количеству. Не добавлено: ${extra}.`);
+  if (tooBig) notes.push(`Фото больше ${maxPhotoMb} МБ не прикрепляются. Пропущено: ${tooBig}.`);
+  if (notes.length) alertMsg(notes.join('\n'));
 });
 
 function total() { return items.reduce((s, it) => s + it.price * (cart.get(it.id) || 0), 0); }
@@ -229,6 +316,7 @@ async function loadCatalog() {
     const res = await fetch(API_URL);
     const data = await res.json();
     if (!data.ok) throw new Error(data.error);
+    if (data.maxPhotoMb) maxPhotoMb = data.maxPhotoMb;
     store.set(CACHE_KEY, JSON.stringify(data.items));
     render(data.items);
   } catch (e) {
@@ -237,6 +325,31 @@ async function loadCatalog() {
 }
 
 /* ---------- Оформление ---------- */
+function setBusyText(text) {
+  if (tg) { tg.MainButton.setText(text); tg.MainButton.disable(); }
+  else { fallbackBtn.disabled = true; fallbackBtn.textContent = text; }
+}
+
+async function post(payload) {
+  const res = await fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // без preflight-запроса, иначе Apps Script не примет
+    body: JSON.stringify(Object.assign({ initData: tg ? tg.initData : '' }, payload))
+  });
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || 'Сервер не принял запрос. Попробуйте ещё раз.');
+  return data;
+}
+
+function readBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',')[1]);
+    r.onerror = () => reject(new Error('Не удалось прочитать фото с телефона. Прикрепите его заново.'));
+    r.readAsDataURL(file);
+  });
+}
+
 async function submit() {
   if (busy || !cart.size) return;
   const agent = agentEl.value.replace(/\s+/g, ' ').trim();
@@ -248,19 +361,27 @@ async function submit() {
     return;
   }
   busy = true;
-  tg ? tg.MainButton.showProgress(false) : (fallbackBtn.disabled = true, fallbackBtn.textContent = 'Отправляю…');
   try {
-    const res = await fetch(API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // без preflight-запроса, иначе Apps Script не примет
-      body: JSON.stringify({
-        initData: tg ? tg.initData : '',
-        agent,
-        items: [...cart].map(([id, qty]) => ({ id, qty }))
-      })
+    // 1. Фото — по одному, оригиналами. Уже загруженные при повторной попытке не грузятся заново
+    const queue = [];
+    for (const arr of photos.values()) arr.forEach(p => { if (!p.fileId) queue.push(p); });
+    for (let k = 0; k < queue.length; k++) {
+      setBusyText(`Загружаю фото ${k + 1} из ${queue.length}…`);
+      const data = await post({
+        action: 'upload',
+        name: queue[k].file.name || 'photo.jpg',
+        mime: queue[k].file.type || 'image/jpeg',
+        data: await readBase64(queue[k].file)
+      });
+      queue[k].fileId = data.fileId;
+    }
+
+    // 2. Заказ
+    setBusyText('Оформляю заказ…');
+    const data = await post({
+      agent,
+      items: [...cart].map(([id, qty]) => ({ id, qty, photos: (photos.get(id) || []).map(p => p.fileId) }))
     });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error || 'Не удалось оформить заказ. Попробуйте ещё раз.');
     haptic.ok();
     showDone(data);
   } catch (e) {
@@ -268,7 +389,7 @@ async function submit() {
     alertMsg(e instanceof TypeError ? 'Нет связи с сервером. Проверьте интернет и попробуйте ещё раз.' : e.message);
   } finally {
     busy = false;
-    if (tg) tg.MainButton.hideProgress(); else fallbackBtn.disabled = false;
+    if (tg) tg.MainButton.enable(); else fallbackBtn.disabled = false;
     if (!$('app').hidden) updateTotal();
   }
 }
@@ -276,14 +397,16 @@ async function submit() {
 function showDone(data) {
   $('app').hidden = true; $('done').hidden = false;
   $('doneTitle').textContent = `Заказ №${data.orderNo} оформлен`;
-  $('doneText').textContent = `Сумма ${money(data.total)}. Заказ записан в таблицу и отправлен в группу.`;
+  const ph = data.photos ? `, фото: ${data.photos}` : '';
+  $('doneText').textContent = `Сумма ${money(data.total)}${ph}. Заказ записан в таблицу и отправлен в группу.`;
   if (data.warning) { $('doneText').textContent = data.warning; $('doneText').className = 'warn'; }
   if (tg) { tg.MainButton.setText('Закрыть'); tg.MainButton.show(); } else fallbackBtn.hidden = true;
   window.scrollTo(0, 0);
 }
 
 function resetOrder() {
-  cart.clear(); $('done').hidden = true; $('app').hidden = false; $('doneText').className = '';
+  cart.clear();
+  for (const id of [...photos.keys()]) dropPhotos(id, 0); $('done').hidden = true; $('app').hidden = false; $('doneText').className = '';
   render(items);
 }
 
