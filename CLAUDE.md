@@ -44,7 +44,7 @@ Mini App сети фотостудий «В кадре». Агенты в Telegr
 ### Фронтенд (index.html)
 1. Не трогай строку `API_URL`, если не меняется развёртывание.
 2. `git add -A && git commit -m "..." && git push`
-3. Telegram кэширует страницу: попроси владельца в @BotFather → `/myapps` → приложение → Edit Web App URL поставить `https://prmeadm.github.io/grs/?v=N` со следующим номером. Последний номер — в разделе «Последний ?v» ниже; после смены в BotFather обнови его.
+3. Telegram кэширует страницу: попроси владельца в @BotFather → `/myapps` → приложение → Edit Web App URL поставить `https://prmeadm.github.io/grs/?v=N` со следующим номером. Последний номер — в разделе «Последний ?v» выше; после смены в BotFather обнови его.
 
 ### Проверка перед пушем
 - `node --check apps-script/Code.gs` (скопировав в .js) и проверка синтаксиса скрипта из `index.html`.
