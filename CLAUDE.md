@@ -22,7 +22,7 @@ Mini App сети фотостудий «В кадре». Агенты в Telegr
 
 ## Идентификаторы
 
-- Script ID: `ВСТАВЬ_SCRIPT_ID` (Apps Script → ⚙️ Настройки проекта → Идентификаторы). Тот же ID в `apps-script/.clasp.json`.
+- Script ID: `1vo9_wF_jQOvQ-2GKL_uExt3HCS7-NH3C7r16QDz-Xzi4oBtx-Xszkz-e` (Apps Script → ⚙️ Настройки проекта → Идентификаторы). Тот же ID в `apps-script/.clasp.json`.
 - Deployment ID веб-приложения: `AKfycbyWZOok4ZFCOkRm89GDrKQIdt0QSzuVjiQuN7b2mbrkjHtGmzEyWX5ljvyFK7l6D_Hm` (Начать развертывание → Управление развертываниями → «Идентификатор развертывания»). Это часть `API_URL` между `/s/` и `/exec`.
 - `CHAT_ID` группы: супергруппа, начинается с `-100`.
 
