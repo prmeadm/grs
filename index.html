@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Заказ услуг</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  /* Цвета берутся из темы Telegram; запасные значения нужны только для проверки в обычном браузере */
+  :root {
+    --fb-bg: #efeff4; --fb-card: #ffffff; --fb-text: #111114; --fb-hint: #8e8e93; --fb-accent: #2481cc; --fb-accent-text: #ffffff;
+    --bg: var(--tg-theme-secondary-bg-color, var(--fb-bg));
+    --card: var(--tg-theme-section-bg-color, var(--tg-theme-bg-color, var(--fb-card)));
+    --text: var(--tg-theme-text-color, var(--fb-text));
+    --hint: var(--tg-theme-hint-color, var(--fb-hint));
+    --head: var(--tg-theme-section-header-text-color, var(--hint));
+    --accent: var(--tg-theme-button-color, var(--fb-accent));
+    --accent-text: var(--tg-theme-button-text-color, var(--fb-accent-text));
+    --danger: var(--tg-theme-destructive-text-color, #e5484d);
+    --sep: color-mix(in srgb, var(--hint) 22%, transparent);
+    --gold-1: #e9cf8a; --gold-2: #b98a2e;
+    --safe-b: max(env(safe-area-inset-bottom, 0px), var(--tg-safe-area-inset-bottom, 0px));
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --fb-bg: #000; --fb-card: #1c1c1e; --fb-text: #f2f2f7; --fb-hint: #8d8d93; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 16px/1.35 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    -webkit-font-smoothing: antialiased; -webkit-tap-highlight-color: transparent;
+    padding: 12px 12px calc(24px + var(--safe-b));
+  }
+  main { max-width: 560px; margin: 0 auto; }
+  h1 { font-size: 26px; line-height: 1.15; font-weight: 700; letter-spacing: -0.01em; margin: 8px 4px 4px; }
+  .lead { color: var(--hint); margin: 0 4px 18px; font-size: 15px; }
+
+  .group { background: var(--card); border-radius: 14px; overflow: hidden; margin-bottom: 22px; }
+  .group-title { color: var(--head); font-size: 14px; font-weight: 600; margin: 0 4px 7px; }
+
+  .field { display: block; padding: 11px 14px 12px; }
+  .field span { display: block; font-size: 13px; color: var(--hint); margin-bottom: 3px; }
+  .field input {
+    width: 100%; border: 0; outline: 0; background: transparent; color: var(--text);
+    font: inherit; font-size: 17px; padding: 2px 0;
+  }
+  .field input::placeholder { color: var(--hint); opacity: .7; }
+  .field.invalid span { color: var(--danger); }
+  .field.invalid { animation: nudge .32s ease; }
+  @keyframes nudge { 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
+
+  .row { display: grid; grid-template-columns: 40px 1fr auto; align-items: center; gap: 12px; padding: 10px 12px 10px 10px; min-height: 60px; }
+  .row { position: relative; }
+  .row + .row::before { content: ""; position: absolute; top: 0; left: 62px; right: 0; height: 1px; background: var(--sep); }
+  .name { font-size: 16px; }
+  .price { font-size: 14px; color: var(--hint); margin-top: 1px; font-variant-numeric: tabular-nums; }
+  .row.picked .price { color: var(--accent); }
+
+  /* Миниатюра в реальной пропорции: 1 см = 1.05 px, так что форматы видно относительно друг друга */
+  .glyph { width: 40px; height: 40px; display: grid; place-items: center; }
+  .shape { width: calc(var(--w) * 1.05px); height: calc(var(--h) * 1.05px); border-radius: 1.5px; }
+  .k-frame  { border: 3.5px solid var(--text); background: color-mix(in srgb, var(--accent) 18%, var(--card)); }
+  .k-photo  { border: 1.5px solid color-mix(in srgb, var(--hint) 70%, transparent); background: color-mix(in srgb, var(--accent) 12%, var(--card)); }
+  .k-plate  { background: linear-gradient(135deg, color-mix(in srgb, var(--hint) 55%, var(--card)), color-mix(in srgb, var(--hint) 25%, var(--card))); border-radius: 3px; }
+  .k-gold   { background: linear-gradient(135deg, var(--gold-1), var(--gold-2)); border-radius: 3px; }
+  .k-svc    { width: 22px; height: 22px; border-radius: 50%; border: 1.5px dashed var(--hint); }
+
+  .add, .stepper button {
+    border: 0; font: inherit; cursor: pointer; color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 13%, transparent);
+    width: 34px; height: 34px; border-radius: 17px; font-size: 22px; line-height: 1;
+    display: grid; place-items: center; touch-action: manipulation;
+  }
+  .stepper { display: flex; align-items: center; gap: 2px; background: color-mix(in srgb, var(--accent) 13%, transparent); border-radius: 17px; }
+  .stepper button { background: transparent; }
+  .stepper output { min-width: 22px; text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .state { text-align: center; color: var(--hint); padding: 36px 12px; }
+  .state button { margin-top: 12px; }
+  .link-btn { border: 0; background: none; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; padding: 8px; }
+
+  /* Кнопка для проверки в браузере; в Telegram используется его собственная нижняя кнопка */
+  .fallback {
+    position: sticky; bottom: calc(10px + var(--safe-b)); width: 100%; margin-top: 8px;
+    border: 0; border-radius: 12px; padding: 15px; font: inherit; font-weight: 600;
+    background: var(--accent); color: var(--accent-text); cursor: pointer;
+  }
+  .fallback:disabled { opacity: .6; }
+
+  #done { text-align: center; padding: 18vh 20px 0; max-width: 420px; margin: 0 auto; }
+  .check { width: 76px; height: 76px; margin: 0 auto 18px; border-radius: 50%; background: var(--accent); display: grid; place-items: center; }
+  .check svg { width: 38px; height: 38px; stroke: var(--accent-text); stroke-width: 3.2; fill: none; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 40; stroke-dashoffset: 40; animation: draw .45s .1s ease-out forwards; }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+  #done h2 { font-size: 24px; margin: 0 0 6px; }
+  #done p { color: var(--hint); margin: 0 0 22px; }
+  #done .warn { color: var(--danger); }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } .check svg { stroke-dashoffset: 0; } }
+</style>
+</head>
+<body>
+<main id="app">
+  <h1>Новый заказ</h1>
+  <p class="lead">Отметьте услуги и количество, затем оформите заказ.</p>
+
+  <div class="group">
+    <label class="field" id="agentField">
+      <span>Фамилия и имя агента</span>
+      <input id="agent" autocomplete="name" placeholder="Иванов Иван" maxlength="100" enterkeyhint="done">
+    </label>
+  </div>
+
+  <div id="catalog"><p class="state">Загружаю прайс…</p></div>
+  <button class="fallback" id="fallbackBtn" hidden></button>
+</main>
+
+<section id="done" hidden>
+  <div class="check"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>
+  <h2 id="doneTitle">Заказ оформлен</h2>
+  <p id="doneText"></p>
+  <button class="link-btn" id="againBtn">Оформить ещё один заказ</button>
+</section>
+
+<script>
+/* ======= НАСТРОЙКА: вставь сюда URL веб-приложения Apps Script ======= */
+const API_URL = 'https://script.google.com/macros/s/AKfycbzc225WFpsFM6hPvqRrHrgiH3bRTj3qcBeluk1gsDa6Qj2gV2ubgDPYb8ondoOg_xnS6A/exec';
+/* ===================================================================== */
+
+const tg = window.Telegram && Telegram.WebApp && Telegram.WebApp.initData ? Telegram.WebApp : null;
+const $ = id => document.getElementById(id);
+const catalogEl = $('catalog'), agentEl = $('agent'), fallbackBtn = $('fallbackBtn');
+const CACHE_KEY = 'catalog-v1', AGENT_KEY = 'agent-name';
+let items = [], cart = new Map(), busy = false;
+
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+};
+const haptic = {
+  tap() { tg?.HapticFeedback?.selectionChanged(); },
+  ok() { tg?.HapticFeedback?.notificationOccurred('success'); },
+  err() { tg?.HapticFeedback?.notificationOccurred('error'); }
+};
+const money = n => {
+  const r = Math.round(n * 100) / 100;
+  return r.toLocaleString('ru-RU', { minimumFractionDigits: r % 1 ? 2 : 0, maximumFractionDigits: 2 }) + '\u00a0р';
+};
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function alertMsg(text) { tg?.showAlert ? tg.showAlert(text) : alert(text); }
+
+/* ---------- Миниатюры форматов ---------- */
+function glyph(name) {
+  const n = name.toLowerCase();
+  const m = n.match(/(\d+)\s*[x×х*]\s*(\d+)/);
+  let kind = 'svc';
+  if (n.includes('табличк')) kind = n.includes('золот') ? 'gold' : 'plate';
+  else if (n.includes('без рамки')) kind = 'photo';
+  else if (n.includes('рамк')) kind = 'frame';
+  else if (m) kind = 'photo';
+  if (kind === 'svc') return '<span class="glyph"><span class="shape k-svc"></span></span>';
+  let [w, h] = m ? [+m[1], +m[2]] : [18, 24];
+  if (w > h) [w, h] = [h, w];
+  return `<span class="glyph"><span class="shape k-${kind}" style="--w:${w};--h:${h}"></span></span>`;
+}
+
+/* ---------- Каталог ---------- */
+function render(list) {
+  items = list;
+  const ids = new Set(list.map(i => i.id));
+  for (const id of cart.keys()) if (!ids.has(id)) cart.delete(id);
+
+  const groups = new Map();
+  list.forEach(it => { if (!groups.has(it.category)) groups.set(it.category, []); groups.get(it.category).push(it); });
+  if (!list.length) { catalogEl.innerHTML = '<p class="state">Прайс пока пустой. Добавьте услуги на лист «Прайс» в таблице.</p>'; return; }
+
+  catalogEl.innerHTML = [...groups].map(([cat, arr]) => `
+    <h2 class="group-title">${esc(cat)}</h2>
+    <div class="group">${arr.map(rowHtml).join('')}</div>`).join('');
+  updateTotal();
+}
+
+function rowHtml(it) {
+  const q = cart.get(it.id) || 0;
+  const ctrl = q
+    ? `<div class="stepper"><button data-act="minus" aria-label="Убрать одну">−</button><output>${q}</output><button data-act="plus" aria-label="Добавить ещё">+</button></div>`
+    : `<button class="add" data-act="plus" aria-label="Добавить ${esc(it.name)}">+</button>`;
+  return `<div class="row${q ? ' picked' : ''}" data-id="${esc(it.id)}">
+    ${glyph(it.name)}
+    <div><div class="name">${esc(it.name)}</div><div class="price">${money(it.price)}${q > 1 ? ' × ' + q + ' = ' + money(it.price * q) : ''}</div></div>
+    ${ctrl}</div>`;
+}
+
+catalogEl.addEventListener('click', e => {
+  const btn = e.target.closest('button[data-act]');
+  if (btn) {
+    const row = btn.closest('.row'), id = row.dataset.id;
+    const q = (cart.get(id) || 0) + (btn.dataset.act === 'plus' ? 1 : -1);
+    q > 0 ? cart.set(id, q) : cart.delete(id);
+    row.outerHTML = rowHtml(items.find(i => i.id === id));
+    haptic.tap();
+    updateTotal();
+    return;
+  }
+  if (e.target.id === 'retry') loadCatalog();
+});
+
+function total() { return items.reduce((s, it) => s + it.price * (cart.get(it.id) || 0), 0); }
+
+function updateTotal() {
+  const has = cart.size > 0;
+  const label = 'Оформить заказ на ' + money(total());
+  if (tg) {
+    tg.MainButton.setText(label);
+    has ? tg.MainButton.show() : tg.MainButton.hide();
+  } else {
+    fallbackBtn.textContent = label;
+    fallbackBtn.hidden = !has;
+  }
+}
+
+async function loadCatalog() {
+  let cached = null;
+  try { cached = JSON.parse(store.get(CACHE_KEY) || 'null'); } catch (e) {}
+  if (cached) render(cached);
+  else catalogEl.innerHTML = '<p class="state">Загружаю прайс…</p>';
+  try {
+    const res = await fetch(API_URL);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+    store.set(CACHE_KEY, JSON.stringify(data.items));
+    render(data.items);
+  } catch (e) {
+    if (!cached) catalogEl.innerHTML = '<p class="state">Не удалось загрузить прайс. Проверьте интернет.<br><button class="link-btn" id="retry">Повторить</button></p>';
+  }
+}
+
+/* ---------- Оформление ---------- */
+async function submit() {
+  if (busy || !cart.size) return;
+  const agent = agentEl.value.replace(/\s+/g, ' ').trim();
+  if (!agent) {
+    const f = $('agentField');
+    f.classList.remove('invalid'); void f.offsetWidth; f.classList.add('invalid');
+    agentEl.focus(); haptic.err();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    return;
+  }
+  busy = true;
+  tg ? tg.MainButton.showProgress(false) : (fallbackBtn.disabled = true, fallbackBtn.textContent = 'Отправляю…');
+  try {
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // без preflight-запроса, иначе Apps Script не примет
+      body: JSON.stringify({
+        initData: tg ? tg.initData : '',
+        agent,
+        items: [...cart].map(([id, qty]) => ({ id, qty }))
+      })
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Не удалось оформить заказ. Попробуйте ещё раз.');
+    haptic.ok();
+    showDone(data);
+  } catch (e) {
+    haptic.err();
+    alertMsg(e instanceof TypeError ? 'Нет связи с сервером. Проверьте интернет и попробуйте ещё раз.' : e.message);
+  } finally {
+    busy = false;
+    if (tg) tg.MainButton.hideProgress(); else fallbackBtn.disabled = false;
+    if (!$('app').hidden) updateTotal();
+  }
+}
+
+function showDone(data) {
+  $('app').hidden = true; $('done').hidden = false;
+  $('doneTitle').textContent = `Заказ №${data.orderNo} оформлен`;
+  $('doneText').textContent = `Сумма ${money(data.total)}. Заказ записан в таблицу и отправлен в группу.`;
+  if (data.warning) { $('doneText').textContent = data.warning; $('doneText').className = 'warn'; }
+  if (tg) { tg.MainButton.setText('Закрыть'); tg.MainButton.show(); } else fallbackBtn.hidden = true;
+  window.scrollTo(0, 0);
+}
+
+function resetOrder() {
+  cart.clear(); $('done').hidden = true; $('app').hidden = false; $('doneText').className = '';
+  render(items);
+}
+
+function onMainButton() { $('done').hidden ? submit() : tg.close(); }
+
+/* ---------- Старт ---------- */
+agentEl.value = store.get(AGENT_KEY) ||
+  (tg?.initDataUnsafe?.user ? [tg.initDataUnsafe.user.last_name, tg.initDataUnsafe.user.first_name].filter(Boolean).join(' ') : '');
+agentEl.addEventListener('input', () => { store.set(AGENT_KEY, agentEl.value.trim()); $('agentField').classList.remove('invalid'); });
+agentEl.addEventListener('keydown', e => { if (e.key === 'Enter') agentEl.blur(); });
+fallbackBtn.addEventListener('click', submit);
+$('againBtn').addEventListener('click', resetOrder);
+
+if (tg) {
+  tg.ready(); tg.expand();
+  tg.MainButton.onClick(onMainButton);
+  const syncTheme = () => document.documentElement.dataset.theme = tg.colorScheme;
+  syncTheme(); tg.onEvent('themeChanged', syncTheme);
+}
+loadCatalog();
+</script>
+</body>
+</html>
